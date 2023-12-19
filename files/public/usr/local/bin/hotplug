@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+
+SUBSYSTEM="$1"
+
+
+
+monitor() {
+    status="$(cat /sys/class/drm/card0-HDMI-A-1/status)"
+
+    if [[ "${status}" == disconnected ]]; then
+        xrandr --output eDP-1 --auto --output HDMI-1 --off
+        awesome-client << EOF
+        require('awful')
+        awesome.restart()
+EOF
+    elif [[ "${status}" == connected ]]; then
+        xrandr --output eDP-1 --off --output HDMI-1 --auto
+        awesome-client << EOF
+        require('awful')
+        awesome.restart()
+EOF
+    fi
+}
+
+REGDIR="/tmp/.X11-unix/registrations"
+
+shopt -s nullglob
+
+readarray -t users < <(echo "${REGDIR}/"*)
+
+for user in "${users[@]##*/}"; do
+    [[ "${user}" == root ]] && continue
+
+    export HOME="/home/${user}"
+    export DISPLAY="$(<"${REGDIR}/${user}")"
+    export XAUTHORITY="${HOME}/.Xauthority"
+    echo $user:$USER:$DISPLAY:$XAUTHORITY >> /tmp/hotplug
+
+    [[ "${SUBSYSTEM}" == "USB" ]] && xmodmap "${HOME}/.Xmodmap"
+    [[ "${SUBSYSTEM}" == "DRM" ]] && monitor
+done

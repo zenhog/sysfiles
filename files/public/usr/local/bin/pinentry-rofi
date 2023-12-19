@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+
+
+ACTIVE="$(</sys/class/tty/tty0/active)"
+
+getpin() {
+    if [[ "${ACTIVE}" == tty1 ]]; then
+        export DISPLAY="$(<"/tmp/.X11-unix/registrations/${USER}")"
+        rofi -input /dev/null -dmenu -password -theme pinentry-dark -p "PIN:" \
+            -mesg "PIN DDESC"
+    else
+        export TERM="$(tmux display -p '#{client_termname}')"
+        export TTY="$(tmux display -p '#{pane_tty}')"
+        tmux popup -E bash -c "echo -n 'PIN: ' ;stty -echo; head -n1 > /proc/$$/fd/0"
+    fi
+}
+
+
+echo "OK"
+
+while read -r cmd rest; do
+
+    if [ -z "$cmd" ]; then
+        continue;
+    fi
+
+    case "$cmd" in
+        \#*)
+        ;;
+        GETPIN)
+            read -r PIN < <(getpin)
+            echo "D ${PIN}"
+            echo "OK"
+            ;;
+        BYE)
+            echo "OK"
+            exit 0
+            ;;
+        *)
+            echo "OK"
+            ;;
+    esac
+done

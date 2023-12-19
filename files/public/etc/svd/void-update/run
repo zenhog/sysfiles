@@ -1,0 +1,8 @@
+#!/bin/sh
+
+exec 2>&1
+
+export USER="$(getent passwd "$UID" | awk -F: '{print $1}')"
+export HOME="$(getent passwd "$UID" | awk -F: '{print $6}')"
+
+exec snooze -v -H\* -s 1h /usr/local/bin/UPDATE

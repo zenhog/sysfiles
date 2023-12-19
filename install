@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+
+[[ -z "${BASH_SOURCE[0]}" ]] && DIR="$HOME/.sysfiles" ||
+    DIR="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)"
+
+readarray -t PACKAGES < <(sed -rn '/^[^#]/p' "$DIR/files/packages.txt")
+
+# for some reason, xbps can't figure this out on its own
+sudo xbps-install -Syu xbps
+sudo xbps-install -Syu ncurses-base
+sudo xbps-install -Syu void-repo-nonfree
+sudo xbps-install -Syu "${PACKAGES[@]}"
+
+URL=https://github.com/zenhog/sysfiles
+
+DOTURL=https://raw.githubusercontent.com/zenhog/dotfiles/master/install
+
+curl -s "$DOTURL" | bash || exit 1
+
+which git >/dev/null || { echo "git not found"; exit 1; }
+
+[[ -d "$DIR" ]] || git clone "$URL" "$DIR"
+
+cd "$DIR" || exit 1
+
+"$DIR/.githooks/hookscript" unlock || exit 1
+
+sudo rm /etc/runit/runsvdir/default/*
+
+sudo useradd --system --no-create-home --no-log-init vpn
+sudo useradd --system --no-create-home --no-log-init log
+
+sudo rsync -v -archive --no-super --no-g --no-t --no-d --no-o --relative \
+    files/public/./ /
+
+sudo rsync -v -archive --no-super --no-g --no-t --no-d --no-o --relative \
+    --exclude=etc/sudoers files/private/./ /
+
+GROUPS=(audio video input wheel bluetooth wireshark tor lxd kvm vpn log users)
+
+sudo usermod -a -G "$(IFS=,; echo "${GROUPS[*]}";)" "$(whoami)"
+
+sudo lxd init --preseed < /etc/lxd-config.yaml
+
+read -r macname < <(sudo cat /etc/hostname)
+read -r sshname < <(sudo cat /var/lib/tor/ssh/hostname)
+
+cat << EOF > "$HOME/.ssh/hosts/$macname.onion"
+Host ${macname}.onion
+Hostname ${sshname}
+EOF
+
+cat << EOF > "$HOME/.ssh/hosts/$macname.serveo"
+Host ${macname}.serveo
+Hostname ${macname}
+EOF
+
+sudo resolvconf -u
+
+sudo cat private/etc/sudoers | sudo EDITOR=tee visudo

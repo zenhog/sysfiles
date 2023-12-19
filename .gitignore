@@ -1,0 +1,8 @@
+files/private/
+files/private.*/
+files/tmp/
+files/tmp.*/
+
+/void-*
+
+supervise/

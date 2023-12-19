@@ -1,0 +1,5 @@
+#!/bin/sh
+
+vsv restart tor
+vsv restart networkmanager
+vsv restart openvpn
