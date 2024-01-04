@@ -218,6 +218,8 @@ wireguard-tools
 hddtemp
 NetworkManager
 dbus
+python-dbus
+python-dbus-devel
 dnscrypt-proxy
 openntpd
 collectd
@@ -262,7 +264,6 @@ alsa-plugins-pulseaudio
 pulseaudio-utils
 pamixer
 pulsemixer
-iwd
 udisks2
 udiskie
 upower
