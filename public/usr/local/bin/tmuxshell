@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+
+if [[ "$1" == -c ]]; then
+  exec tmux -c "$2"
+fi
+
+if [[ "$TERM" == linux && "$(tty)" == /dev/pts/* ]]; then
+  PRE="TERM=fbterm"
+fi
+
+exec env "$PRE" tmux new-session -DX -As "$(hostname)"

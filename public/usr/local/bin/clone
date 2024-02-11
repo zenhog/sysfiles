@@ -1,0 +1,220 @@
+#!/usr/bin/env bash
+
+efi() {
+    [[ -d /sys/firmware/efi ]]
+}
+
+prompt() {
+    eval "[[ -n \$$1 ]]" && return 0
+    if [[ -z "$SEC" ]]; then
+        echo -n "$1 [$2]: "
+        eval "read -r $1"
+    else
+        echo -n "$1 [$2]: "
+        eval "read -rs $1"
+        echo
+    fi
+    eval "$1=\${$1:-$2}"
+    eval "[[ -n \$$1 ]]"
+}
+
+prompts() {
+    prompt NEWUSER || exit 1
+    prompt MACNAME || exit 1
+    prompt TARGETS || exit 1
+    TARGETS=($TARGETS)
+    prompt TIMEZONE Europe/Paris
+    prompt ARCH x86_64
+    SEC=1 prompt PASSPHRASE || exit 1
+
+    BOOTLABEL=EFIBOOT
+    ROOTLABEL=ROOTVOL
+    MOUNT_OPTS="defaults,rw,noatime"
+    BTRFS_OPTS="$MOUNT_OPTS,compress=zstd,autodefrag,commit=120"
+}
+
+format() {
+    prompt SKIP_FORMAT NO
+
+    PARTITIONS=("${TARGETS[@]/%/3}")
+
+    [[ "$SKIP_FORMAT" != NO ]] && return 0
+
+    for t in "${TARGETS[@]}"; do
+        local offset=$(($(blockdev --getsz "$t") - 2048))
+
+        dd bs=512 count=2048 if=/dev/zero of="$t"
+        dd bs=512 count=2048 if=/dev/zero of="$t" seek="$offset"
+
+        parted "$t" mklabel gpt
+
+        parted "$t" mkpart primary   2MiB  10MiB
+        parted "$t" mkpart primary  10MiB 138MiB
+        parted "$t" mkpart primary 138MiB   100%
+
+        parted "$t" set 1 bios_grub on
+        parted "$t" set 2 esp       on
+
+        parted "$t" name 1 GRUB
+        parted "$t" name 2 ESP
+        parted "$t" name 3 BTRFS
+    done
+}
+
+
+filesystems() {
+    prompt SKIP_FILESYSTEMS NO
+    [[ "$SKIP_FILESYSTEMS" != NO ]] && return 0
+
+    mkdir -p "/newroot"
+
+    DISKREF="${PARTITIONS[0]}"
+    EFIPART="${DISKREF/3/2}"
+
+
+    mkfs.vfat  -n "$BOOTLABEL" -F 32 "$EFIPART" || exit 1
+    mkfs.btrfs -L "$ROOTLABEL" -f "${PARTITIONS[@]}" || exit 1
+
+    mountpoint -q /newroot && umount -R /newroot
+
+    mount -o "$MOUNT_OPTS" "$DISKREF" /newroot || exit 1
+
+    btrfs subvolume create /newroot/main || exit 1
+    btrfs subvolume create /newroot/home || exit 1
+    btrfs subvolume create /newroot/snapshots || exit 1
+
+    umount -R /newroot
+
+    mount -o "$BTRFS_OPTS,subvol=main" "$DISKREF" /newroot || exit 1
+
+    mkdir -p /newroot/home
+    mkdir -p /newroot/.snapshots
+    mkdir -p /newroot/.volumes
+    mkdir -p /newroot/boot/grub/efi
+
+    mount -o "$BTRFS_OPTS,subvol=home"      "$DISKREF" /newroot/home
+    mount -o "$BTRFS_OPTS,subvol=snapshots" "$DISKREF" /newroot/.snapshots
+    mount -o "$MOUNT_OPTS"                  "$DISKREF" /newroot/.volumes
+    mount -o "$MOUNT_OPTS"                  "$EFIPART" /newroot/boot/grub/efi
+}
+
+populate() {
+    prompt SKIP_POPULATE NO
+    [[ "$SKIP_POPULATE" != NO ]] && return 0
+
+    SRC='https://raw.githubusercontent.com/void-linux/void-packages/master'\
+'/etc/xbps.d/repos-remote.conf'
+
+    read -r REPO < <(curl -s "$SRC" | awk -F= '/current$/{print $2}' |
+        sed -rn 's|current|live/current/|p')
+
+    read -r ROOTFS < <(curl -s "$REPO" | grep -i "$ARCH-rootfs" |
+        sed -rn 's:<[^>]*>(.*)<[^>]*>:\1:p' | awk '{print $1}')
+
+    [[ -f "$ROOTFS" ]] || curl "$REPO/$ROOTFS" > "$ROOTFS" || exit 1
+
+    tar xvf "$ROOTFS" -C "/newroot" || exit 1
+
+    for d in dev proc sys; do
+        mount --rbind "/$d" "/newroot/$d"
+        mount --make-rslave "/newroot/$d"
+    done
+
+    cp -L /etc/resolv.conf /newroot/etc
+
+    BASE_PACKAGES=(base-system btrfs-progs grub grub-x86_64-efi ansible git zsh
+        curl wget void-repo-nonfree gnupg mkpasswd pass tar sudo rsync openssh)
+    chroot /newroot xbps-install -Syu xbps || exit 1
+    chroot /newroot xbps-install -yu "${BASE_PACKAGES[@]}" || exit 1
+    chroot /newroot xbps-install -yu ncurses-base || exit 1
+}
+
+configure() {
+    chroot /newroot echo "$MACNAME" > /etc/hostname
+    chroot /newroot ln -svf "/usr/share/zoneinfo/$TIMEZONE" /etc/localtime
+    chroot /newroot echo LANG=en_US.UTF-8  > /etc/locale.conf
+    chroot /newroot echo en_US.UTF-8 UTF-8 > /etc/default/libc-locales
+    chroot /newroot xbps-reconfigure -f glibc-locales
+
+    chroot /newroot echo "HARDWARECLOCK=UTC"     > /etc/rc.conf
+    chroot /newroot echo "CGROUP_MODE=hybrid"   >> /etc/rc.conf
+
+    cat << EOF | column -t > /newroot/etc/fstab
+LABEL=$ROOTLABEL /              btrfs $BTRFS_OPTS,subvol=main 0 0
+LABEL=$ROOTLABEL /home          btrfs $BTRFS_OPTS,subvol=home 0 0
+LABEL=$BOOTLABEL /boot/grub/efi vfat  $MOUNT_OPTS 0 2
+LABEL=$ROOTLABEL /.volumes      btrfs $BTRFS_OPTS 0 0
+LABEL=$ROOTLABEL /.snapshots    btrfs $BTRFS_OPTS,subvol=snapshots 0 0
+tmpfs            /tmp           tmpfs defaults,nosuid,nodev 0 0
+#/.swapfile       none           swap  defaults 0 0
+EOF
+
+    chroot /newroot mkdir  -p /var/lib/libvirt/images
+    chroot /newroot chattr +C /var/lib/libvirt/images
+
+    cat << EOF > "/newroot/etc/default/grub"
+GRUB_CMDLINE_LINUX_DEFAULT="net.ifnames=0"
+GRUB_DISABLE_SUBMENU=y
+GRUB_GFXMODE=640x480,800x600,1024x768,1280x1024,auto
+GRUB_GFXPAYLOAD_LINUX=keep
+EOF
+}
+
+bootloaders() {
+    if efi; then
+        chroot /newroot grub-install       \
+            --target=x86_64-efi            \
+            --efi-directory=/boot/grub/efi \
+            --boot-directory=/boot         \
+            --bootloader-id=GRUB || exit 1
+    fi
+
+    for t in "${TARGETS[@]}"; do
+        chroot /newroot grub-install --target=i386-pc "$t" || exit 1
+    done
+
+    chroot /newroot grub-mkconfig -o /boot/grub/grub.cfg || exit 1
+    chroot /newroot xbps-reconfigure -fa
+}
+
+finalize() {
+    chroot "/newroot" usermod -s /bin/zsh root
+    chroot "/newroot" useradd -m -s /bin/zsh "$NEWUSER"
+
+    # facilitate 'install' script operations, sudoers file will be rewritten
+    chroot /newroot bash -c \
+        'echo "ALL ALL=(ALL) NOPASSWD: ALL" | EDITOR=tee visudo'
+
+    # remember to change passwords for both users later on
+#    chroot /newroot chpasswd -c SHA512 << EOF
+#root:$PASSPHRASE
+#$NEWUSER:$PASSPHRASE
+#EOF
+    chroot /newroot chpasswd << EOF
+root:
+$NEWUSER:
+EOF
+
+    URL=https://raw.githubusercontent.com/zenhog/sysfiles/master/install
+
+    chroot /newroot su -l "$NEWUSER" -s /bin/bash -c \
+        "export PASSPHRASE='$PASSPHRASE'; curl -s $URL | bash"
+
+    chroot /newroot \
+        btrfs subvolume snapshot /.volumes/main /.snapshots/main@clone
+
+    umount -R "/newroot"
+}
+
+main() {
+    prompts
+    which curl || exit 1
+    format
+    filesystems
+    populate
+    configure
+    bootloaders
+    finalize
+}
+
+main

@@ -1,0 +1,23 @@
+#!/bin/bash
+
+read -r token
+if [[ $PAM_USER = root ]]; then
+    exit 0
+fi
+
+preset=/usr/libexec/gpg-preset-passphrase
+
+gpgconf --launch gpg-agent
+# SVDIR="$PAM_USER/.usv" sv check gpg-agent
+
+#keygrips=($(gpg -K --with-colons |
+#    sed -nr \ '/ssb/,+2{/grp:/s/^grp:+(.*):$/\1/p}'))
+
+readarray -t keygrips < <(gpg -K --with-colons |
+    sed -nr '/sec|ssb/,+2{/grp:/s/^grp:+(.*):$/\1/p}')
+
+for keygrip in "${keygrips[@]}"; do
+    $preset -c "$keygrip" <<< "$token"
+done
+
+exit 0

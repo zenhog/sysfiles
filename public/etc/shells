@@ -1,0 +1,11 @@
+/usr/bin/bash
+/bin/bash
+/usr/bin/sh
+/usr/bin/dash
+/bin/sh
+/bin/dash
+/bin/zsh
+/usr/bin/zsh
+/bin/tmux
+/usr/bin/tmux
+/usr/local/bin/tmuxshell
