@@ -63,7 +63,6 @@ xdg-utils
 xdg-user-dirs
 
 # cli utilities
-mu
 mimeo
 notmuch
 run-mailcap
@@ -157,8 +156,8 @@ wireguard
 wireguard-tools
 hddtemp
 dbus
-python-dbus
-python-dbus-devel
+python3-dbus
+python3-dbus-devel
 collectd
 lxd
 libvirt
